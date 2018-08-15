@@ -6,6 +6,13 @@ import numpy as np
 import pandas as pd
 import os
 import fire
+from keras.layers import Input, Embedding
+from keras.layers import Flatten, Dense, merge, concatenate
+from keras.models import Model
+from keras.layers.normalization import BatchNormalization
+from keras.regularizers import l2, l1_l2
+from sklearn.preprocessing import Imputer, PolynomialFeatures, LabelEncoder
+
 
 def _download():
     """
@@ -47,19 +54,126 @@ def _download():
     return train_data_df, test_data_df
 
 
+def _embedding_input(n_in, n_out, reg):
+    inp = Input(shape=(1,), dtype='int64')
+    return inp, Embedding(n_in, n_out, input_length=1, embeddings_regularizer=l2(reg))(inp)
+
+
+def _clean_target(x):
+    if x[-1] == ".":
+        return x[:-1]
+    else:
+        return x
+
+
+
 def prepare_data():
     """
     Prepare data for training
+    1. Label encoding for categorical columns
     """
-
     train_data, test_data = _download()
-    print(train_data.head(5))
-    print(test_data.head(5))
 
+    print(train_data.dtypes)
+    categorical_columns = ["education", "workclass", "marital_status", "occupation", "income_bracket"]
+    # target_column = "income_bracket"
+
+
+    train_data = train_data[categorical_columns]
+    test_data = test_data[categorical_columns]
+
+    train_data["IS_TRAIN"] = 1
+    test_data["IS_TRAIN"] = 0
+
+    df_all = pd.concat([train_data, test_data], ignore_index=True)
+
+    df_all["income_bracket"] = df_all["income_bracket"].apply(lambda x: _clean_target(x))
+
+    # print(df_all["income_bracket"].value_counts())
+
+    le = LabelEncoder()
+    le_count = 0
+
+    feature_columns = list(df_all.columns)
+
+    # feature_columns.remove(target_column)
+    feature_columns.remove("IS_TRAIN")
+
+    # print(type(df_all["education"].nunique()))
+
+    for col in feature_columns:
+        le.fit(df_all[col])
+        df_all[col] = le.transform(df_all[col])
+        le_count += 1
+
+    # print(df_all)
+    return df_all
+
+
+def model_deep():
+    """deep model building"""
+    MODEL_SETTING = {
+        "DIM": 10,
+        "REG": 1e-4
+    }
+
+    data = prepare_data()
+    TARGET = "income_bracket"
+
+
+    train_x_df = data.loc[data["IS_TRAIN"] == 1].drop(columns=["IS_TRAIN", TARGET], axis=1)
+    # print(train_x_df)
+    train_x = [train_x_df[_] for _ in list(train_x_df.columns)]
+
+    train_y = np.array(data.loc[data["IS_TRAIN"] == 1][TARGET].values).reshape(-1, 1)
+
+    test_x_df = data.loc[data["IS_TRAIN"] == 0].drop(["IS_TRAIN", TARGET], axis=1)
+    test_x = [test_x_df[_] for _ in list(test_x_df.columns)]
+
+    test_y = np.array(data.loc[data["IS_TRAIN"] == 0][TARGET].values).reshape(-1, 1)
+
+    embedding_cols = list(data.columns)
+    embedding_cols.remove("IS_TRAIN")
+    embedding_cols.remove(TARGET)
+
+    embedding_tensors = []
+
+    for _ in embedding_cols:
+        number_input = data[_].nunique()
+        tensor_input, tensor_build = _embedding_input(
+            number_input, MODEL_SETTING["DIM"], MODEL_SETTING["REG"]
+        )
+        # print(tensor_input)
+        embedding_tensors.append((tensor_input, tensor_build))
+
+    input_layer = [_[0] for _ in embedding_tensors]
+    input_embed = [_[1] for _ in embedding_tensors]
+
+    # x = merge(input_embed, mode='concat')
+    x = concatenate(input_embed, axis=-1)
+    x = Flatten()(x)
+    x = BatchNormalization()(x)
+    x = Dense(200, activation='relu', kernel_regularizer=l1_l2(l1=0.01, l2=0.01))(x)
+    # d = Dropout(0.5)(d) # Dropout don't seem to help in this model
+    x = Dense(200, activation='relu')(x)
+    # d = Dropout(0.5)(d) # Dropout don't seem to help in this model
+    x = Dense(1, activation="sigmoid")(x)
+
+    deep = Model(input_layer, x)
+
+    deep.compile(optimizer="adam",
+                 loss="binary_crossentropy",
+                 metrics=["acc"])
+
+    deep.fit(train_x, train_y, batch_size=64, epochs=50, validation_data=(test_x, test_y))
+
+    eval_res = deep.evaluate(test_x, test_y)
+
+    print("eval results: ", eval_res)
 
 
 if __name__ == "__main__":
     fire.Fire({
-        "prepare": prepare_data
-
+        "prepare": prepare_data,
+        "deep": model_deep
     })
