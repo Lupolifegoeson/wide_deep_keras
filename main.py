@@ -7,7 +7,7 @@ import pandas as pd
 import os
 import fire
 from keras.layers import Input, Embedding
-from keras.layers import Flatten, Dense, merge, concatenate
+from keras.layers import Flatten, Dense, concatenate, Dropout
 from keras.models import Model
 from keras.layers.normalization import BatchNormalization
 from keras.regularizers import l2, l1_l2
@@ -74,8 +74,8 @@ def prepare_data():
     """
     train_data, test_data = _download()
 
-    print(train_data.dtypes)
     categorical_columns = ["education", "workclass", "marital_status", "occupation", "income_bracket"]
+    TARGET = "income_bracket"
     # target_column = "income_bracket"
 
 
@@ -94,43 +94,31 @@ def prepare_data():
     le = LabelEncoder()
     le_count = 0
 
-    feature_columns = list(df_all.columns)
-
-    # feature_columns.remove(target_column)
-    feature_columns.remove("IS_TRAIN")
-
-    # print(type(df_all["education"].nunique()))
-
-    for col in feature_columns:
+    for col in categorical_columns:
         le.fit(df_all[col])
         df_all[col] = le.transform(df_all[col])
         le_count += 1
 
-    # print(df_all)
-    return df_all
 
+    train_x_df = df_all.loc[df_all["IS_TRAIN"] == 1].drop(columns=["IS_TRAIN", TARGET], axis=1)
+    train_x = [train_x_df[_] for _ in list(train_x_df.columns)]
+    train_y = np.array(df_all.loc[df_all["IS_TRAIN"] == 1][TARGET].values).reshape(-1, 1)
+    test_x_df = df_all.loc[df_all["IS_TRAIN"] == 0].drop(["IS_TRAIN", TARGET], axis=1)
+    test_x = [test_x_df[_] for _ in list(test_x_df.columns)]
+    test_y = np.array(df_all.loc[df_all["IS_TRAIN"] == 0][TARGET].values).reshape(-1, 1)
+
+    return train_x, train_y, test_x, test_y
 
 def model_deep():
     """deep model building"""
     MODEL_SETTING = {
         "DIM": 10,
-        "REG": 1e-4
+        "REG": 1e-4,
+        "BATCH_SIZE": 64,
+        "EPOCHS": 10
     }
 
     data = prepare_data()
-    TARGET = "income_bracket"
-
-
-    train_x_df = data.loc[data["IS_TRAIN"] == 1].drop(columns=["IS_TRAIN", TARGET], axis=1)
-    # print(train_x_df)
-    train_x = [train_x_df[_] for _ in list(train_x_df.columns)]
-
-    train_y = np.array(data.loc[data["IS_TRAIN"] == 1][TARGET].values).reshape(-1, 1)
-
-    test_x_df = data.loc[data["IS_TRAIN"] == 0].drop(["IS_TRAIN", TARGET], axis=1)
-    test_x = [test_x_df[_] for _ in list(test_x_df.columns)]
-
-    test_y = np.array(data.loc[data["IS_TRAIN"] == 0][TARGET].values).reshape(-1, 1)
 
     embedding_cols = list(data.columns)
     embedding_cols.remove("IS_TRAIN")
@@ -143,31 +131,31 @@ def model_deep():
         tensor_input, tensor_build = _embedding_input(
             number_input, MODEL_SETTING["DIM"], MODEL_SETTING["REG"]
         )
-        # print(tensor_input)
         embedding_tensors.append((tensor_input, tensor_build))
 
     input_layer = [_[0] for _ in embedding_tensors]
     input_embed = [_[1] for _ in embedding_tensors]
 
-    # x = merge(input_embed, mode='concat')
     x = concatenate(input_embed, axis=-1)
     x = Flatten()(x)
     x = BatchNormalization()(x)
     x = Dense(200, activation='relu', kernel_regularizer=l1_l2(l1=0.01, l2=0.01))(x)
-    # d = Dropout(0.5)(d) # Dropout don't seem to help in this model
+    x = Dropout(0.5)(x)
     x = Dense(200, activation='relu')(x)
-    # d = Dropout(0.5)(d) # Dropout don't seem to help in this model
     x = Dense(1, activation="sigmoid")(x)
 
-    deep = Model(input_layer, x)
+    deep_model = Model(input_layer, x)
 
-    deep.compile(optimizer="adam",
-                 loss="binary_crossentropy",
-                 metrics=["acc"])
+    deep_model.compile(optimizer="adam",
+                       loss="binary_crossentropy",
+                       metrics=["acc"])
 
-    deep.fit(train_x, train_y, batch_size=64, epochs=50, validation_data=(test_x, test_y))
+    deep_model.fit(train_x, train_y,
+                   batch_size=MODEL_SETTING["BATCH_SIZE"],
+                   epochs=MODEL_SETTING["EPOCHS"],
+                   validation_data=(test_x, test_y))
 
-    eval_res = deep.evaluate(test_x, test_y)
+    eval_res = deep_model.evaluate(test_x, test_y)
 
     print("eval results: ", eval_res)
 
