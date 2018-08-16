@@ -11,7 +11,7 @@ from keras.layers import Flatten, Dense, concatenate, Dropout, Reshape
 from keras.models import Model
 from keras.layers.normalization import BatchNormalization
 from keras.regularizers import l2, l1_l2
-from sklearn.preprocessing import Imputer, PolynomialFeatures, LabelEncoder
+from sklearn.preprocessing import Imputer, PolynomialFeatures, LabelEncoder, MinMaxScaler
 
 
 def _download():
@@ -86,8 +86,7 @@ def prepare_data():
 
     TARGET = "income_bracket"
 
-    columns_used = CAT_FEATURES[:]
-    columns_used.extend(NUM_FEATURES)
+    columns_used = CAT_FEATURES+NUM_FEATURES
     columns_used.append(TARGET)
 
     TRAIN_FLAG = "IS_TRAIN"
@@ -117,7 +116,7 @@ def prepare_data():
     return df_all, TRAIN_FLAG, TARGET, CAT_FEATURES, NUM_FEATURES
 
 
-def model_deep():
+def deep_model():
     """deep model building"""
     MODEL_SETTING = {
         "DIM": 5,
@@ -135,8 +134,8 @@ def model_deep():
     test_x = [test_x_df[_] for _ in list(test_x_df.columns)]
     test_y = np.array(data.loc[data[TRAIN_FLAG] == 0][TARGET].values).reshape(-1, 1)
 
-    # embedding_cols = list(data.columns)
-    # embedding_cols.remove("IS_TRAIN")
+    print(train_x[0])
+
 
     embedding_tensors = []
     for _ in CAT_FEATURES:
@@ -150,7 +149,6 @@ def model_deep():
     for _ in  NUM_FEATURES:
         tensor_input, tensor_build = _numerical_input()
         continuous_tensors.append((tensor_input, tensor_build))
-
 
     input_layer = [_[0] for _ in embedding_tensors]
     input_layer += [_[0] for _ in continuous_tensors]
@@ -182,8 +180,53 @@ def model_deep():
     print("eval results: ", eval_res)
 
 
+def wide_model():
+    MODEL_SETTING = {
+        "DIM": 5,
+        "REG": 1e-4,
+        "BATCH_SIZE": 64,
+        "EPOCHS": 20}
+
+    data, TRAIN_FLAG, TARGET, CAT_FEATURES, NUM_FEATURES = prepare_data()
+
+    data = pd.get_dummies(data, columns=[_ for _ in CAT_FEATURES])
+
+    train_x_df = data.loc[data[TRAIN_FLAG] == 1].drop(columns=[TRAIN_FLAG, TARGET], axis=1)
+    # train_x = [train_x_df[_] for _ in list(train_x_df.columns)]
+    train_x = train_x_df.values
+
+    train_y = np.array(data.loc[data[TRAIN_FLAG] == 1][TARGET].values).reshape(-1, 1)
+    test_x_df = data.loc[data[TRAIN_FLAG] == 0].drop([TRAIN_FLAG, TARGET], axis=1)
+    # test_x = [test_x_df[_] for _ in list(test_x_df.columns)]
+    test_x = test_x_df.values
+
+    test_y = np.array(data.loc[data[TRAIN_FLAG] == 0][TARGET].values).reshape(-1, 1)
+
+    scaler = MinMaxScaler()
+
+    train_x = scaler.fit_transform(train_x)
+    test_x = scaler.fit_transform(test_x)
+
+    input_layer = Input(shape=(train_x.shape[1],), dtype='float32')
+    x = Dense(train_y.shape[1], activation="relu")(input_layer)
+    wide_model = Model(input_layer, x)
+
+    wide_model.compile(optimizer="adam",
+                       loss="binary_crossentropy",
+                       metrics=["acc"])
+
+    wide_model.fit(train_x, train_y,
+                   epochs=MODEL_SETTING["EPOCHS"],
+                   batch_size=MODEL_SETTING["BATCH_SIZE"],
+                   validation_data=(test_x, test_y))
+
+    results = wide_model.evaluate(test_x, test_y)
+    print("\n", results)
+
+
 if __name__ == "__main__":
     fire.Fire({
         "prepare": prepare_data,
-        "deep": model_deep
+        "deep": deep_model,
+        "wide": wide_model
     })
